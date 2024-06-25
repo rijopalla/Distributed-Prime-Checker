@@ -2,53 +2,30 @@ import java.io.*;
 import java.net.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
 
 public class MasterServer {
     private static final int PORT = 5000;
-    private static final int MAX_THREAD_COUNT = 1024;
+    private static final int MAX_THREAD_COUNT = 1;
 
-    public static void main(String[] args) {        
-        try (PrintWriter logWriter = new PrintWriter(new FileWriter("response_times.txt"))) {
-            logWriter.println("Thread Count, Run 1, Run 2, Run 3, Run 4, Run 5, Average");
+    public static void main(String[] args) {
 
-            System.out.println("Running experiment with " + MAX_THREAD_COUNT + " threads...");
-            ExecutorService pool = Executors.newFixedThreadPool(MAX_THREAD_COUNT);
+        System.out.println("Running experiment with " + MAX_THREAD_COUNT + " threads...");
+        ExecutorService pool = Executors.newFixedThreadPool(MAX_THREAD_COUNT);
 
-            long[] runTimes = new long[5];
+        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+            System.out.println("Master server is running...");
 
-            try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-                System.out.println("Master server is running...");
-                
-                for (int i = 0; i < 5; i++) {
-                    long startTime = System.currentTimeMillis();
-                    Socket clientSocket = serverSocket.accept();
-                    pool.execute(new ClientHandler(clientSocket));
-                    long endTime = System.currentTimeMillis();
-                    runTimes[i] = endTime - startTime;
-                    System.out.println("Run " + (i + 1) + " completed in " + runTimes[i] + " ms");
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
+            for(int i= 0; i < 5; i++) {
+                Socket clientSocket = serverSocket.accept();
+                pool.execute(new ClientHandler(clientSocket));
             }
-
-            pool.shutdown();
-
-            long sum = 0;
-            for (long time : runTimes) {
-                sum += time;
-            }
-            long average = sum / runTimes.length;
-
-            //write to the log file
-            logWriter.print(MAX_THREAD_COUNT);
-            for (long time : runTimes) {
-                logWriter.print(", " + time);
-            }
-            logWriter.println(", " + average);
-
         } catch (IOException e) {
             e.printStackTrace();
         }
+
+        pool.shutdown();
     }
 
     private static class ClientHandler implements Runnable {
@@ -60,22 +37,31 @@ public class MasterServer {
 
         @Override
         public void run() {
+            ExecutorService taskPool = Executors.newSingleThreadExecutor();
             try (BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                  PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
 
                 // Read the task from the client
                 String task = in.readLine();
+                System.out.println("Received task: " + task);
                 String[] points = task.split(",");
                 int start = Integer.parseInt(points[0]);
                 int end = Integer.parseInt(points[1]);
 
-                // Perform the task of finding primes
-                String result = findPrimes(start, end);
+                // Perform the task of finding primes using a separate thread
+                Future<String> result = taskPool.submit(() -> {
+                    System.out.println("Starting findPrimes task from " + start + " to " + end);
+                    return findPrimes(start, end);
+                });
 
                 // Send the result back to the client
-                out.println(result);
+                out.println(result.get());
             } catch (IOException e) {
                 e.printStackTrace();
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            } finally {
+                taskPool.shutdown();
             }
         }
 
@@ -83,15 +69,16 @@ public class MasterServer {
             StringBuilder primes = new StringBuilder();
             for (int i = start; i <= end; i++) {
                 if (check_prime(i)) {
-                    primes.append(i).append(" ");
+                    primes.append(i);
                 }
+                // System.out.println("Checking: " + i);
             }
             return primes.toString();
         }
 
         private boolean check_prime(int n) {
-            if (n == 1) { //check if n = 1
-                return false; 
+            if (n == 1) { // check if n = 1
+                return false;
             }
             for (int i = 2; i * i <= n; i++) {
                 if (n % i == 0) {
